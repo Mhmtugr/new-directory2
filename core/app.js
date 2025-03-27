@@ -32,7 +32,7 @@ const CONFIG = {
 
 // Sayfa yüklendiğinde
 document.addEventListener('DOMContentLoaded', () => {
-    console.log("ElektroTrack uygulaması başlatılıyor...");
+    console.log("MehmetEndüstriyelTakip uygulaması başlatılıyor...");
     
     // Uygulama başlatma durumunu takip etmek için global değişken
     window.appState = {
@@ -156,7 +156,7 @@ async function startApp() {
                     // demoLogin yoksa basit bir yerine koyma oluşturalım
                     window.currentUser = {
                         uid: 'demo-user-1',
-                        email: 'demo@elektrotrack.com',
+                        email: 'demo@mehmetendustriyel.com',
                         displayName: 'Demo Kullanıcı'
                     };
                 }
@@ -481,7 +481,7 @@ function enableDemoMode() {
     // Kullanıcı bilgilerini ayarla
     window.currentUser = {
         uid: 'demo-user-1',
-        email: 'demo@mehmetendustriyeltakip.com',
+        email: 'demo@mehmetendustriyel.com',
         displayName: 'Demo Kullanıcı'
     };
     

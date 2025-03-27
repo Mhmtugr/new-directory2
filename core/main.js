@@ -1,4 +1,4 @@
- /**
+/**
  * main.js
  * Uygulama ana işlevleri, sayfa kontrolü ve yardımcı fonksiyonlar
  */
@@ -26,7 +26,7 @@ const pageLoadStatus = {};
  * Uygulama başlatma işlevi
  */
 function initApp() {
-    console.log("ElektroTrack uygulaması başlatılıyor...");
+    console.log("MehmetEndüstriyelTakip uygulaması başlatılıyor...");
     
     // Demo modu kontrolü ve bildirimi
     if (appState.isDemoMode) {
