@@ -784,3 +784,253 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     }
 });
+
+/**
+ * Yeni sipariş ekleyen fonksiyon
+ * @param {Object} orderData - Sipariş verileri
+ */
+async function addNewOrder(orderData) {
+    try {
+        // İlerleme bilgisini göster
+        document.getElementById('add-order-status').innerHTML = `<div class="alert alert-info">Sipariş ekleniyor...</div>`;
+        
+        // Firebase Firestore'a sipariş verilerini ekle
+        const orderRef = await firebase.firestore().collection('orders').add({
+            ...orderData,
+            status: 'planning', // Başlangıç durumu
+            creationDate: firebase.firestore.FieldValue.serverTimestamp(),
+            lastUpdated: firebase.firestore.FieldValue.serverTimestamp(),
+            progress: 0,
+            currentStage: 'Planlama',
+            notes: orderData.notes || ''
+        });
+        
+        console.log('Sipariş başarıyla eklendi:', orderRef.id);
+        
+        // ERP sistemine sipariş verilerini gönder
+        if (AppConfig.erpIntegration && AppConfig.erpIntegration.enabled) {
+            try {
+                const erpResult = await ERPService.createOrder({
+                    ...orderData,
+                    firebaseId: orderRef.id
+                });
+                
+                // ERP ID'sini Firebase'e kaydet
+                if (erpResult && erpResult.erpOrderId) {
+                    await orderRef.update({
+                        erpOrderId: erpResult.erpOrderId
+                    });
+                }
+                
+                console.log('Sipariş ERP sistemine kaydedildi');
+            } catch (erpError) {
+                console.error('ERP sistemi entegrasyonu hatası:', erpError);
+                // ERP hatasını göster ama işleme devam et
+                document.getElementById('add-order-status').innerHTML += `
+                    <div class="alert alert-warning">
+                        ERP sistemine kayıt sırasında bir hata oluştu. Sipariş oluşturuldu fakat ERP entegrasyonu başarısız oldu.
+                    </div>
+                `;
+            }
+        }
+        
+        // Malzeme listesi kontrolü ve otomatik oluşturma
+        if (AppConfig.ai?.enabled && AppConfig.ai.materialPrediction) {
+            try {
+                document.getElementById('add-order-status').innerHTML += `
+                    <div class="alert alert-info">Malzeme listesi oluşturuluyor...</div>
+                `;
+                
+                // AI ile malzeme listesi oluştur
+                let materials;
+                if (window.AIIntegrationModule && typeof window.AIIntegrationModule.predictMaterials === 'function') {
+                    materials = await window.AIIntegrationModule.predictMaterials(orderData);
+                } else {
+                    // Varsayılan malzeme listesi (hücre tipine göre)
+                    materials = await fetchDefaultMaterialList(orderData.cellType);
+                }
+                
+                // Malzemeleri veritabanına kaydet
+                if (materials && materials.length > 0) {
+                    const batch = firebase.firestore().batch();
+                    materials.forEach(material => {
+                        const materialRef = firebase.firestore().collection('materials').doc();
+                        batch.set(materialRef, {
+                            ...material,
+                            orderId: orderRef.id,
+                            orderNo: orderData.orderNo,
+                            creationDate: firebase.firestore.FieldValue.serverTimestamp()
+                        });
+                    });
+                    
+                    await batch.commit();
+                    console.log(`${materials.length} malzeme başarıyla eklendi`);
+                }
+            } catch (aiError) {
+                console.error('Malzeme tahmini hatası:', aiError);
+                document.getElementById('add-order-status').innerHTML += `
+                    <div class="alert alert-warning">
+                        Malzeme listesi otomatik oluşturulamadı. Lütfen manuel olarak ekleyin.
+                    </div>
+                `;
+            }
+        }
+        
+        // Üretim planlama için öneri iste
+        if (AppConfig.ai?.enabled && AppConfig.ai.prediction) {
+            try {
+                document.getElementById('add-order-status').innerHTML += `
+                    <div class="alert alert-info">Üretim planı önerisi oluşturuluyor...</div>
+                `;
+                
+                // AI ile üretim süresi tahmini
+                let productionTimeEstimate;
+                if (window.AIIntegrationModule && typeof window.AIIntegrationModule.predictProductionTime === 'function') {
+                    productionTimeEstimate = await window.AIIntegrationModule.predictProductionTime(orderData);
+                } else {
+                    // Varsayılan üretim süresi tahmini (hücre tipine göre)
+                    productionTimeEstimate = getDefaultProductionTime(orderData.cellType, orderData.quantity);
+                }
+                
+                // Üretim tahmini bilgilerini güncelle
+                if (productionTimeEstimate) {
+                    await orderRef.update({
+                        estimatedProductionDays: productionTimeEstimate.estimatedDays,
+                        estimatedCompletionDate: calculateCompletionDate(productionTimeEstimate.estimatedDays)
+                    });
+                    
+                    console.log('Üretim süresi tahmini:', productionTimeEstimate);
+                }
+            } catch (predictionError) {
+                console.error('Üretim süresi tahmini hatası:', predictionError);
+            }
+        }
+        
+        // Başarı mesajı göster
+        document.getElementById('add-order-status').innerHTML = `
+            <div class="alert alert-success">
+                <strong>Başarılı!</strong> Sipariş başarıyla eklendi. (ID: ${orderRef.id})
+                <div class="mt-2">
+                    <button class="btn btn-sm btn-primary" onclick="showOrderDetails('${orderRef.id}')">
+                        <i class="fas fa-eye"></i> Sipariş Detayını Görüntüle
+                    </button>
+                    <button class="btn btn-sm btn-secondary" onclick="clearOrderForm()">
+                        <i class="fas fa-plus"></i> Yeni Sipariş Ekle
+                    </button>
+                </div>
+            </div>
+        `;
+        
+        // Sipariş listesini güncelle
+        loadActiveOrders();
+        
+        // Siparişin kullanıcı arayüzüne eklenmesi için Event yaratma
+        if (typeof EventBus !== 'undefined') {
+            EventBus.emit('order-added', { 
+                orderId: orderRef.id,
+                orderData: {
+                    ...orderData,
+                    id: orderRef.id
+                }
+            });
+        }
+        
+        return { success: true, orderId: orderRef.id };
+    } catch (error) {
+        console.error('Sipariş ekleme hatası:', error);
+        document.getElementById('add-order-status').innerHTML = `
+            <div class="alert alert-danger">
+                <strong>Hata!</strong> Sipariş eklenirken bir sorun oluştu: ${error.message}
+            </div>
+        `;
+        return { success: false, error: error.message };
+    }
+}
+
+/**
+ * Varsayılan üretim süresini hesaplar
+ * @param {string} cellType - Hücre tipi
+ * @param {number} quantity - Adet
+ * @returns {Object} Üretim süresi tahmini
+ */
+function getDefaultProductionTime(cellType, quantity) {
+    // Hücre tipine göre temel üretim süresi (gün)
+    const baseTime = {
+        'RM 36 CB': 18,
+        'RM 36 LB': 15,
+        'RM 36 FL': 20,
+        'RM 36 RMU': 12
+    }[cellType] || 15;
+    
+    // Adet sayısına göre çarpan (logaritmik ölçekte)
+    const quantityFactor = Math.log2(quantity || 1) * 0.8;
+    
+    // Toplam süre
+    const totalDays = Math.ceil(baseTime + (baseTime * quantityFactor));
+    
+    return {
+        estimatedDays: totalDays,
+        method: 'default'
+    };
+}
+
+/**
+ * Tamamlanma tarihini hesaplar
+ * @param {number} days - Tahmini gün sayısı
+ * @returns {Date} Tamamlanma tarihi
+ */
+function calculateCompletionDate(days) {
+    const today = new Date();
+    const completionDate = new Date(today);
+    completionDate.setDate(today.getDate() + days);
+    return completionDate;
+}
+
+/**
+ * Hücre tipine göre varsayılan malzeme listesini getirir
+ * @param {string} cellType - Hücre tipi
+ * @returns {Promise<Array>} Malzeme listesi
+ */
+async function fetchDefaultMaterialList(cellType) {
+    try {
+        // Gerçek uygulamada API çağrısı yapılabilir
+        const materialTypesRef = firebase.firestore().collection('materialTypes')
+            .where('cellType', '==', cellType).limit(1);
+        
+        const snapshot = await materialTypesRef.get();
+        
+        if (!snapshot.empty) {
+            // Veritabanında bu hücre tipi için önceden tanımlanmış malzeme listesi var
+            return snapshot.docs[0].data().materials || [];
+        }
+        
+        // Varsayılan malzeme listesi
+        const defaultMaterials = {
+            'RM 36 CB': [
+                { code: "137998", name: "Siemens 7SR1003-1JA20-2DA0+ZY20 24VDC", quantity: 1, category: "Röle" },
+                { code: "144866", name: "KAP-80/190-95 Akım Trafosu", quantity: 3, category: "Akım Trafosu" },
+                { code: "120170", name: "M480TB/G-027-95.300UN5 Kablo Başlığı", quantity: 6, category: "Kablo" }
+            ],
+            'RM 36 LB': [
+                { code: "125433", name: "Yük Ayırıcı KX-200A", quantity: 1, category: "Ayırıcı" },
+                { code: "118764", name: "Gerilim Göstergesi VDS-36kV", quantity: 3, category: "Gösterge" },
+                { code: "129012", name: "Topraklama Seti", quantity: 1, category: "Topraklama" }
+            ],
+            'RM 36 FL': [
+                { code: "131578", name: "HRC Sigorta 40A", quantity: 3, category: "Sigorta" },
+                { code: "143290", name: "Kontaktör LC1 D80A", quantity: 1, category: "Kontaktör" },
+                { code: "112389", name: "Alçak Gerilim Rölesi", quantity: 1, category: "Röle" }
+            ],
+            'RM 36 RMU': [
+                { code: "156789", name: "SF6 Gaz Sensörü", quantity: 1, category: "Sensör" },
+                { code: "154320", name: "RMU Mekanizma", quantity: 1, category: "Mekanizma" },
+                { code: "157238", name: "Anahtarlama Ünitesi", quantity: 2, category: "Anahtarlama" }
+            ]
+        };
+        
+        return defaultMaterials[cellType] || [];
+    } catch (error) {
+        console.error('Varsayılan malzeme listesi getirme hatası:', error);
+        return [];
+    }
+}

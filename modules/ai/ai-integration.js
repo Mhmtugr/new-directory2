@@ -110,111 +110,227 @@ if (window.AIIntegrationModule) {
         
         // DeepSeek-r1 modelini başlat
         async function initializeDeepSeekModel() {
-            const config = AppConfig.ai.deepseek;
-            
-            Logger.info("DeepSeek AI modeli başlatılıyor", { model: config.model });
-            
-            // DeepSeek model konfigürasyonu
-            aiModels.deepseek = {
-                apiKey: config.apiKey,
-                model: config.model,
-                maxTokens: config.maxTokens,
-                temperature: config.temperature,
-                systemMessage: config.systemMessage,
+            try {
+                // DeepSeek API key kontrolü
+                const apiKey = AppConfig.ai?.deepseek?.apiKey || 'sk-42d0185c484b4bf2907392864f4ae76d';
+                const model = AppConfig.ai?.deepseek?.model || 'deepseek-r1';
                 
-                // Soru sorma fonksiyonu
-                async askQuestion(question, context = "") {
-                    try {
-                        Logger.info("DeepSeek API'sine sorgu gönderiliyor", {
-                            questionLength: question.length,
-                            contextLength: context.length
-                        });
-                        
-                        // Backend API'sine istek gönder
-                        const response = await fetch('/api/ai/deepseek/ask', {
-                            method: 'POST',
-                            headers: {
-                                'Content-Type': 'application/json',
-                                'Authorization': `Bearer ${config.apiKey}`
-                            },
-                            body: JSON.stringify({
-                                question,
-                                context,
-                                system_message: config.systemMessage || "Sen bir yapay zeka asistanısın",
-                                model: config.model,
-                                max_tokens: config.maxTokens,
-                                temperature: config.temperature
-                            })
-                        });
-                        
-                        if (!response.ok) {
-                            Logger.error("DeepSeek API hatası", { status: response.status, statusText: response.statusText });
-                            throw new Error(`DeepSeek API hatası: ${response.status}`);
-                        }
-                        
-                        const result = await response.json();
-                        Logger.info("DeepSeek API yanıtı alındı", { responseLength: JSON.stringify(result).length });
-                        return result.answer || result.text || result.response || "Üzgünüm, bir yanıt oluşturulamadı.";
-                    } catch (error) {
-                        Logger.error("DeepSeek ile soru cevaplama hatası:", { error: error.message, stack: error.stack });
-                        console.error("DeepSeek ile soru cevaplama hatası:", error);
-                        // Fallback yanıt
-                        return "Üzgünüm, şu anda DeepSeek modeliyle iletişim kurarken bir sorun yaşıyorum. Lütfen daha sonra tekrar deneyin.";
-                    }
-                },
+                Logger.info("DeepSeek modeli başlatılıyor", { model });
                 
-                // Malzeme tahmini yapma
-                async predictMaterials(orderDetails) {
-                    try {
-                        const response = await fetch('/api/ai/deepseek/materials', {
-                            method: 'POST',
-                            headers: {
-                                'Content-Type': 'application/json',
-                                'Authorization': `Bearer ${config.apiKey}`
-                            },
-                            body: JSON.stringify({
-                                orderDetails,
-                                model: config.model
-                            })
-                        });
-                        
-                        if (!response.ok) {
-                            throw new Error(`DeepSeek malzeme tahmini hatası: ${response.status}`);
-                        }
-                        
-                        return await response.json();
-                    } catch (error) {
-                        console.error("Malzeme tahmini hatası:", error);
-                        return null;
-                    }
-                },
-                
-                // Üretim süresi tahmini
-                async predictProductionTime(orderDetails) {
-                    try {
-                        const response = await fetch('/api/ai/deepseek/production-time', {
-                            method: 'POST',
-                            headers: {
-                                'Content-Type': 'application/json',
-                                'Authorization': `Bearer ${config.apiKey}`
-                            },
-                            body: JSON.stringify({
-                                orderDetails,
-                                model: config.model
-                            })
-                        });
-                        
-                        if (!response.ok) {
-                            throw new Error(`DeepSeek üretim süresi tahmini hatası: ${response.status}`);
-                        }
-                        
-                        return await response.json();
-                    } catch (error) {
-                        console.error("Üretim süresi tahmini hatası:", error);
-                        return null;
-                    }
+                if (!apiKey) {
+                    Logger.error("DeepSeek API anahtarı eksik");
+                    return false;
                 }
-            };
+                
+                // Model nesnesini oluştur
+                aiModels.deepseek = {
+                    apiKey: apiKey,
+                    model: model,
+                    baseUrl: AppConfig.ai?.deepseek?.baseUrl || 'https://api.deepseek.com/v1',
+                    
+                    // Soru sorma fonksiyonu
+                    askQuestion: async function(question, context = "") {
+                        try {
+                            Logger.info("DeepSeek AI'a soru gönderiliyor", { questionLength: question.length, contextLength: context.length });
+                            
+                            const messages = [];
+                            
+                            // Sistem mesajı ekle
+                            if (AppConfig.ai?.deepseek?.systemMessage) {
+                                messages.push({
+                                    role: "system",
+                                    content: AppConfig.ai.deepseek.systemMessage
+                                });
+                            } else {
+                                messages.push({
+                                    role: "system",
+                                    content: "Sen MehmetEndüstriyelTakip uygulaması içindeki yapay zeka asistanısın. Orta gerilim hücre üretimi ve takibi konusunda uzmansın. Kullanıcıya Türkçe yanıt ver."
+                                });
+                            }
+                            
+                            // Bağlam metnini ekle
+                            if (context && context.trim() !== "") {
+                                messages.push({
+                                    role: "system",
+                                    content: `Bağlam bilgisi: ${context}`
+                                });
+                            }
+                            
+                            // Kullanıcı sorusunu ekle
+                            messages.push({
+                                role: "user",
+                                content: question
+                            });
+                            
+                            // DeepSeek API'ye istek at
+                            const response = await fetch(`${this.baseUrl}/chat/completions`, {
+                                method: 'POST',
+                                headers: {
+                                    'Content-Type': 'application/json',
+                                    'Authorization': `Bearer ${this.apiKey}`
+                                },
+                                body: JSON.stringify({
+                                    model: this.model,
+                                    messages: messages,
+                                    temperature: 0.7,
+                                    max_tokens: 2000
+                                })
+                            });
+                            
+                            if (!response.ok) {
+                                const errorData = await response.json();
+                                Logger.error("DeepSeek API yanıt hatası", { status: response.status, error: errorData });
+                                throw new Error(`DeepSeek API yanıt hatası: ${errorData.error?.message || 'Bilinmeyen hata'}`);
+                            }
+                            
+                            const data = await response.json();
+                            const answer = data.choices[0].message.content;
+                            
+                            Logger.info("DeepSeek yanıtı alındı", { answerLength: answer.length });
+                            return answer;
+                        } catch (error) {
+                            Logger.error("DeepSeek soru-cevap hatası", { error: error.message });
+                            throw new Error(`DeepSeek ile soru yanıtlanamadı: ${error.message}`);
+                        }
+                    },
+                    
+                    // Üretim zamanı tahmin fonksiyonu
+                    predictProductionTime: async function(cellType, quantity, specs) {
+                        try {
+                            Logger.info("DeepSeek ile üretim zamanı tahmini isteniyor", { cellType, quantity });
+                            
+                            const prompt = `
+                                Aşağıdaki orta gerilim hücresi üretimi için tahmini üretim süresini iş günü olarak hesapla ve sadece sayısal değeri döndür:
+                                
+                                Hücre Tipi: ${cellType}
+                                Miktar: ${quantity}
+                                ${specs ? 'Teknik Özellikler: ' + specs : ''}
+                                
+                                Lütfen sadece sayısal tahmini gün değerini döndür.
+                            `;
+                            
+                            const response = await fetch(`${this.baseUrl}/chat/completions`, {
+                                method: 'POST',
+                                headers: {
+                                    'Content-Type': 'application/json',
+                                    'Authorization': `Bearer ${this.apiKey}`
+                                },
+                                body: JSON.stringify({
+                                    model: this.model,
+                                    messages: [
+                                        {
+                                            role: "system",
+                                            content: "Sen orta gerilim hücre üretimi konusunda uzman bir yapay zeka asistanısın. Verilere dayalı tahminler yapabilirsin."
+                                        },
+                                        {
+                                            role: "user",
+                                            content: prompt
+                                        }
+                                    ],
+                                    temperature: 0.3,
+                                    max_tokens: 50
+                                })
+                            });
+                            
+                            if (!response.ok) {
+                                const errorData = await response.json();
+                                Logger.error("DeepSeek API üretim zamanı tahmin hatası", { status: response.status, error: errorData });
+                                throw new Error("DeepSeek API üretim zamanı tahmin hatası");
+                            }
+                            
+                            const data = await response.json();
+                            const resultText = data.choices[0].message.content.trim();
+                            
+                            // Sadece sayısal değeri almaya çalış
+                            const numericValue = parseFloat(resultText.replace(/[^\d.]/g, ''));
+                            
+                            Logger.info("DeepSeek üretim zamanı tahmini alındı", { result: numericValue });
+                            
+                            if (isNaN(numericValue)) {
+                                throw new Error("Geçerli bir sayısal değer alınamadı");
+                            }
+                            
+                            return numericValue;
+                        } catch (error) {
+                            Logger.error("DeepSeek üretim zamanı tahmin hatası", { error: error.message });
+                            throw error;
+                        }
+                    },
+                    
+                    // Malzeme listesi tahmini
+                    predictMaterials: async function(cellType, specs) {
+                        try {
+                            Logger.info("DeepSeek ile malzeme listesi tahmini isteniyor", { cellType });
+                            
+                            const prompt = `
+                                Aşağıdaki orta gerilim hücresi için gerekli malzeme listesini oluştur:
+                                
+                                Hücre Tipi: ${cellType}
+                                ${specs ? 'Teknik Özellikler: ' + specs : ''}
+                                
+                                Lütfen JSON formatında bir malzeme listesi döndür. Örnek format:
+                                [
+                                    {"code": "137998%", "name": "Siemens 7SR1003-1JA20-2DA0+ZY20 24VDC", "quantity": 1},
+                                    {"code": "144866%", "name": "KAP-80/190-95 Akım Trafosu", "quantity": 3}
+                                ]
+                            `;
+                            
+                            const response = await fetch(`${this.baseUrl}/chat/completions`, {
+                                method: 'POST',
+                                headers: {
+                                    'Content-Type': 'application/json',
+                                    'Authorization': `Bearer ${this.apiKey}`
+                                },
+                                body: JSON.stringify({
+                                    model: this.model,
+                                    messages: [
+                                        {
+                                            role: "system",
+                                            content: "Sen orta gerilim hücre üretimi konusunda uzman bir yapay zeka asistanısın. Malzeme listelerini doğru şekilde oluşturabilirsin."
+                                        },
+                                        {
+                                            role: "user",
+                                            content: prompt
+                                        }
+                                    ],
+                                    temperature: 0.3,
+                                    max_tokens: 1000
+                                })
+                            });
+                            
+                            if (!response.ok) {
+                                const errorData = await response.json();
+                                Logger.error("DeepSeek API malzeme listesi hatası", { status: response.status, error: errorData });
+                                throw new Error("DeepSeek API malzeme listesi hatası");
+                            }
+                            
+                            const data = await response.json();
+                            const resultText = data.choices[0].message.content.trim();
+                            
+                            // JSON içeriğini bulmak için regex kullan
+                            const jsonMatch = resultText.match(/\[\s*\{.*\}\s*\]/s);
+                            if (!jsonMatch) {
+                                throw new Error("Geçerli JSON formatında malzeme listesi alınamadı");
+                            }
+                            
+                            // JSON'ı parse et
+                            const materialList = JSON.parse(jsonMatch[0]);
+                            
+                            Logger.info("DeepSeek malzeme listesi tahmini alındı", { itemCount: materialList.length });
+                            return materialList;
+                        } catch (error) {
+                            Logger.error("DeepSeek malzeme listesi tahmin hatası", { error: error.message });
+                            throw error;
+                        }
+                    }
+                };
+                
+                Logger.info("DeepSeek modeli başarıyla başlatıldı");
+                return true;
+            } catch (error) {
+                Logger.error("DeepSeek modeli başlatılırken hata", { error: error.message });
+                return false;
+            }
         }
 
         // OpenAI modelini başlat
@@ -703,24 +819,6 @@ if (window.AIIntegrationModule) {
             }
         }
         
-        // DeepSeek modeli ile soru sor
-        async function askDeepSeek(question, context = "") {
-            if (!aiModels.deepseek) {
-                Logger.warn("DeepSeek modeli yüklenmemiş, yükleme başlatılıyor");
-                console.warn("DeepSeek modeli yüklenmemiş. İlk model yükleniyor...");
-                await initializeDeepSeekModel();
-            }
-            
-            if (aiModels.deepseek) {
-                Logger.info("DeepSeek modeli ile soru yanıtlanıyor", { questionLength: question.length });
-                return await aiModels.deepseek.askQuestion(question, context);
-            } else {
-                Logger.error("DeepSeek modeli kullanılamıyor");
-                console.error("DeepSeek modeli kullanılamıyor");
-                return generateFallbackResponse(question);
-            }
-        }
-        
         // OpenAI modeli ile soru sor
         async function askOpenAI(question, context = "") {
             if (!aiModels.openai) {
@@ -733,6 +831,34 @@ if (window.AIIntegrationModule) {
             } else {
                 console.error("OpenAI modeli kullanılamıyor");
                 return generateFallbackResponse(question);
+            }
+        }
+        
+        // DeepSeek modeli ile soru sor
+        async function askDeepSeek(question, context = "") {
+            try {
+                if (!aiModels.deepseek) {
+                    Logger.warn("DeepSeek modeli yüklenmemiş, yükleme başlatılıyor");
+                    console.warn("DeepSeek modeli yüklenmemiş. İlk model yükleniyor...");
+                    await initializeDeepSeekModel();
+                }
+                
+                if (!aiModels.deepseek) {
+                    throw new Error("DeepSeek modeli başlatılamadı");
+                }
+                
+                Logger.info("DeepSeek modeli ile soru yanıtlanıyor", { questionLength: question.length });
+                
+                // aiModels.deepseek üzerinden doğrudan sor
+                if (aiModels.deepseek && typeof aiModels.deepseek.askQuestion === 'function') {
+                    return await aiModels.deepseek.askQuestion(question, context);
+                } else {
+                    throw new Error("DeepSeek modeli düzgün şekilde yapılandırılmamış");
+                }
+            } catch (error) {
+                Logger.error("DeepSeek ile soru yanıtlama hatası", { error: error.message });
+                console.error("DeepSeek ile soru yanıtlama hatası:", error);
+                throw error; // Hatayı üst fonksiyona ilet
             }
         }
         
