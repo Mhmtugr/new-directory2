@@ -3,6 +3,8 @@
  * İleri veri görselleştirme işlevleri - Dashboard için
  */
 
+import Logger from '../../utils/logger.js';
+
 // Üretim verimliliği grafiğini oluştur
 function createProductionEfficiencyChart(containerId) {
     const container = document.getElementById(containerId);
@@ -563,4 +565,242 @@ window.showPage = function(pageName) {
     
     // Özel olayı tetikle
     dispatchPageChangeEvent(pageName);
+};
+
+/**
+ * Üretim verilerini grafiğe dönüştürür
+ * @param {string} containerId - Grafiğin ekleneceği container ID'si
+ * @param {Object} data - Grafik verileri
+ * @param {string} chartType - Grafik tipi ('bar', 'line', 'pie', vb.)
+ */
+function createProductionChart(containerId, data, chartType = 'bar') {
+    try {
+        Logger.info(`${chartType} tipi grafik oluşturuluyor`, { containerId });
+        
+        const container = document.getElementById(containerId);
+        if (!container) {
+            throw new Error(`${containerId} ID'li container bulunamadı`);
+        }
+        
+        // Canvas elementi oluştur
+        let canvas = container.querySelector('canvas');
+        if (!canvas) {
+            canvas = document.createElement('canvas');
+            container.appendChild(canvas);
+        }
+        
+        // Chart.js ile grafik oluştur
+        const ctx = canvas.getContext('2d');
+        
+        // Mevcut grafik varsa temizle
+        if (container._chart) {
+            container._chart.destroy();
+        }
+        
+        // Grafik ayarları
+        const config = {
+            type: chartType,
+            data: data,
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: {
+                        position: 'top',
+                    },
+                    title: {
+                        display: data.title ? true : false,
+                        text: data.title || ''
+                    }
+                }
+            }
+        };
+        
+        // Grafik tipine göre özel ayarlar
+        if (chartType === 'line') {
+            config.options.elements = {
+                line: {
+                    tension: 0.2 // Daha yumuşak çizgiler
+                }
+            };
+        } else if (chartType === 'bar') {
+            config.options.scales = {
+                y: {
+                    beginAtZero: true
+                }
+            };
+        }
+        
+        // Grafik oluştur
+        container._chart = new Chart(ctx, config);
+        
+        // Eğer indirme butonu isteniyorsa ekle
+        if (data.enableDownload) {
+            addChartDownloadButton(container, canvas, data.title || 'chart');
+        }
+        
+        return container._chart;
+    } catch (error) {
+        Logger.error("Grafik oluşturma hatası", { error: error.message, chartType });
+        console.error("Grafik oluşturma hatası:", error);
+        
+        // Hata durumunda container'a hata mesajı göster
+        const container = document.getElementById(containerId);
+        if (container) {
+            container.innerHTML = `<div class="alert alert-danger">Grafik oluşturulurken hata: ${error.message}</div>`;
+        }
+        
+        return null;
+    }
+}
+
+/**
+ * Grafiği indirmek için buton ekler
+ * @param {HTMLElement} container - Grafik container'ı
+ * @param {HTMLCanvasElement} canvas - Grafik canvas'ı
+ * @param {string} filename - İndirilecek dosya adı
+ */
+function addChartDownloadButton(container, canvas, filename) {
+    // Mevcut buton varsa kaldır
+    const existingButton = container.querySelector('.chart-download-btn');
+    if (existingButton) {
+        existingButton.remove();
+    }
+    
+    // Buton oluştur
+    const downloadBtn = document.createElement('button');
+    downloadBtn.className = 'chart-download-btn btn btn-sm btn-outline-secondary';
+    downloadBtn.innerHTML = '<i class="fas fa-download"></i> İndir';
+    downloadBtn.style.position = 'absolute';
+    downloadBtn.style.top = '10px';
+    downloadBtn.style.right = '10px';
+    
+    // Butona tıklama olayı ekle
+    downloadBtn.addEventListener('click', () => {
+        const link = document.createElement('a');
+        link.download = `${filename}.png`;
+        link.href = canvas.toDataURL('image/png');
+        link.click();
+    });
+    
+    // Container'a relatif pozisyon ver (buton için)
+    if (container.style.position !== 'absolute' && container.style.position !== 'fixed') {
+        container.style.position = 'relative';
+    }
+    
+    container.appendChild(downloadBtn);
+}
+
+/**
+ * Pano görünümü oluşturur (Dashboard içinde)
+ * @param {string} containerId - Pano container ID'si
+ * @param {Array} widgets - Pano widget'ları
+ */
+function createDashboard(containerId, widgets) {
+    try {
+        Logger.info("Dashboard panosu oluşturuluyor", { widgetCount: widgets.length });
+        
+        const container = document.getElementById(containerId);
+        if (!container) {
+            throw new Error(`${containerId} ID'li container bulunamadı`);
+        }
+        
+        // Sayfa içeriğini temizle
+        container.innerHTML = '';
+        
+        // Grid container oluştur
+        const gridContainer = document.createElement('div');
+        gridContainer.className = 'dashboard-grid';
+        container.appendChild(gridContainer);
+        
+        // Her widget için
+        widgets.forEach(widget => {
+            // Widget container
+            const widgetContainer = document.createElement('div');
+            widgetContainer.className = `dashboard-widget ${widget.size || 'medium'}`;
+            
+            // Widget içeriği
+            widgetContainer.innerHTML = `
+                <div class="widget-header">
+                    <h3>${widget.title}</h3>
+                    <div class="widget-actions">
+                        ${widget.refreshable ? '<button class="refresh-btn"><i class="fas fa-sync-alt"></i></button>' : ''}
+                        ${widget.expandable ? '<button class="expand-btn"><i class="fas fa-expand"></i></button>' : ''}
+                    </div>
+                </div>
+                <div class="widget-body" id="${widget.id}-body"></div>
+            `;
+            
+            gridContainer.appendChild(widgetContainer);
+            
+            // Widget içeriğini oluştur
+            if (widget.type === 'chart') {
+                createProductionChart(`${widget.id}-body`, widget.data, widget.chartType);
+            } else if (widget.type === 'table') {
+                createDataTable(`${widget.id}-body`, widget.data);
+            } else if (widget.type === 'stats') {
+                createStatsDisplay(`${widget.id}-body`, widget.data);
+            } else if (widget.type === 'html') {
+                document.getElementById(`${widget.id}-body`).innerHTML = widget.content;
+            }
+            
+            // Buton olayları
+            if (widget.refreshable) {
+                widgetContainer.querySelector('.refresh-btn').addEventListener('click', () => {
+                    if (typeof widget.onRefresh === 'function') {
+                        widget.onRefresh(widgetContainer);
+                    }
+                });
+            }
+            
+            if (widget.expandable) {
+                widgetContainer.querySelector('.expand-btn').addEventListener('click', () => {
+                    if (typeof widget.onExpand === 'function') {
+                        widget.onExpand(widgetContainer);
+                    }
+                });
+            }
+        });
+        
+        return true;
+    } catch (error) {
+        Logger.error("Dashboard oluşturma hatası", { error: error.message });
+        console.error("Dashboard oluşturma hatası:", error);
+        
+        // Hata durumunda container'a hata mesajı göster
+        const container = document.getElementById(containerId);
+        if (container) {
+            container.innerHTML = `<div class="alert alert-danger">Dashboard oluşturulurken hata: ${error.message}</div>`;
+        }
+        
+        return false;
+    }
+}
+
+/**
+ * Veri tablosu oluşturur
+ * @param {string} containerId - Tablo container ID'si
+ * @param {Object} data - Tablo verileri
+ */
+function createDataTable(containerId, data) {
+    // Veri tablosu oluşturma mantığı...
+    // (Bu kısım geliştirilecek)
+}
+
+/**
+ * İstatistik kutuları oluşturur
+ * @param {string} containerId - Container ID'si
+ * @param {Array} stats - İstatistik verileri
+ */
+function createStatsDisplay(containerId, stats) {
+    // İstatistik kutuları oluşturma mantığı...
+    // (Bu kısım geliştirilecek)
+}
+
+// Dışa aktarılacak fonksiyonlar
+export default {
+    createProductionChart,
+    createDashboard,
+    createDataTable,
+    createStatsDisplay
 };

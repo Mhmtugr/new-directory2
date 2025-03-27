@@ -8,13 +8,17 @@ if (window.AIIntegrationModule) {
     console.log("AIIntegrationModule zaten yüklenmiş, tekrar yükleme atlanıyor.");
 } else {
     // İçeri aktarma işlemleri
-    let AppConfig, EventBus;
+    let AppConfig, EventBus, Logger;
     
     // AppConfig modülünü yüklemeyi dene
     try {
         if (typeof require !== 'undefined') {
             AppConfig = require('../../config/app-config.js').default;
             EventBus = require('../../utils/event-bus.js').default;
+            Logger = require('../../utils/logger.js').default;
+            
+            // AI modüllerini içe aktar
+            const AIModules = require('./main.js').default;
         } else {
             // Modüller daha önce yüklenmemiş olabilir, global değişkenleri kontrol et
             AppConfig = window.AppConfig || {};
@@ -26,6 +30,16 @@ if (window.AIIntegrationModule) {
                     document.dispatchEvent(customEvent);
                 }
             };
+            Logger = window.Logger || console;
+            
+            // Dinamik olarak AI modüllerini yükle
+            import('./main.js')
+                .then(module => {
+                    console.log("AI modülleri başarıyla yüklendi", module);
+                })
+                .catch(error => {
+                    console.error("AI modüllerini yüklerken hata:", error);
+                });
         }
     } catch (error) {
         console.warn("Modüller dinamik olarak yüklenemedi, alternatif yöntem deneniyor:", error);
@@ -39,6 +53,7 @@ if (window.AIIntegrationModule) {
                 document.dispatchEvent(customEvent);
             }
         };
+        Logger = window.Logger || console;
     }
     
     // Yapay Zeka Entegrasyon Modülü
@@ -68,6 +83,12 @@ if (window.AIIntegrationModule) {
                     console.log("DeepSeek-r1 modeli başarıyla yüklendi");
                 }
                 
+                // OpenAI entegrasyonu
+                if (AppConfig.ai?.openai?.apiKey) {
+                    await initializeOpenAIModel();
+                    console.log("OpenAI modeli başarıyla yüklendi");
+                }
+                
                 // Makine öğrenmesi modeli yükle
                 if (AppConfig.ai?.machineLearning?.enabled) {
                     await initializeMachineLearningModel();
@@ -91,41 +112,54 @@ if (window.AIIntegrationModule) {
         async function initializeDeepSeekModel() {
             const config = AppConfig.ai.deepseek;
             
+            Logger.info("DeepSeek AI modeli başlatılıyor", { model: config.model });
+            
             // DeepSeek model konfigürasyonu
             aiModels.deepseek = {
                 apiKey: config.apiKey,
                 model: config.model,
                 maxTokens: config.maxTokens,
                 temperature: config.temperature,
+                systemMessage: config.systemMessage,
                 
                 // Soru sorma fonksiyonu
                 async askQuestion(question, context = "") {
                     try {
+                        Logger.info("DeepSeek API'sine sorgu gönderiliyor", {
+                            questionLength: question.length,
+                            contextLength: context.length
+                        });
+                        
                         // Backend API'sine istek gönder
                         const response = await fetch('/api/ai/deepseek/ask', {
                             method: 'POST',
                             headers: {
-                                'Content-Type': 'application/json'
+                                'Content-Type': 'application/json',
+                                'Authorization': `Bearer ${config.apiKey}`
                             },
                             body: JSON.stringify({
                                 question,
                                 context,
+                                system_message: config.systemMessage || "Sen bir yapay zeka asistanısın",
                                 model: config.model,
-                                maxTokens: config.maxTokens,
+                                max_tokens: config.maxTokens,
                                 temperature: config.temperature
                             })
                         });
                         
                         if (!response.ok) {
+                            Logger.error("DeepSeek API hatası", { status: response.status, statusText: response.statusText });
                             throw new Error(`DeepSeek API hatası: ${response.status}`);
                         }
                         
                         const result = await response.json();
-                        return result.answer;
+                        Logger.info("DeepSeek API yanıtı alındı", { responseLength: JSON.stringify(result).length });
+                        return result.answer || result.text || result.response || "Üzgünüm, bir yanıt oluşturulamadı.";
                     } catch (error) {
+                        Logger.error("DeepSeek ile soru cevaplama hatası:", { error: error.message, stack: error.stack });
                         console.error("DeepSeek ile soru cevaplama hatası:", error);
                         // Fallback yanıt
-                        return "Üzgünüm, şu anda bir sorun yaşıyorum. Lütfen daha sonra tekrar deneyin.";
+                        return "Üzgünüm, şu anda DeepSeek modeliyle iletişim kurarken bir sorun yaşıyorum. Lütfen daha sonra tekrar deneyin.";
                     }
                 },
                 
@@ -135,7 +169,8 @@ if (window.AIIntegrationModule) {
                         const response = await fetch('/api/ai/deepseek/materials', {
                             method: 'POST',
                             headers: {
-                                'Content-Type': 'application/json'
+                                'Content-Type': 'application/json',
+                                'Authorization': `Bearer ${config.apiKey}`
                             },
                             body: JSON.stringify({
                                 orderDetails,
@@ -160,7 +195,8 @@ if (window.AIIntegrationModule) {
                         const response = await fetch('/api/ai/deepseek/production-time', {
                             method: 'POST',
                             headers: {
-                                'Content-Type': 'application/json'
+                                'Content-Type': 'application/json',
+                                'Authorization': `Bearer ${config.apiKey}`
                             },
                             body: JSON.stringify({
                                 orderDetails,
@@ -176,6 +212,49 @@ if (window.AIIntegrationModule) {
                     } catch (error) {
                         console.error("Üretim süresi tahmini hatası:", error);
                         return null;
+                    }
+                }
+            };
+        }
+
+        // OpenAI modelini başlat
+        async function initializeOpenAIModel() {
+            const config = AppConfig.ai.openai;
+            
+            // OpenAI model konfigürasyonu
+            aiModels.openai = {
+                apiKey: config.apiKey,
+                model: config.model,
+                systemMessage: config.systemMessage,
+                
+                // Soru sorma fonksiyonu
+                async askQuestion(question, context = "") {
+                    try {
+                        // Backend API'sine istek gönder
+                        const response = await fetch('/api/ai/openai/ask', {
+                            method: 'POST',
+                            headers: {
+                                'Content-Type': 'application/json',
+                                'Authorization': `Bearer ${config.apiKey}`
+                            },
+                            body: JSON.stringify({
+                                question,
+                                context,
+                                system_message: config.systemMessage || "Sen bir yapay zeka asistanısın",
+                                model: config.model
+                            })
+                        });
+                        
+                        if (!response.ok) {
+                            throw new Error(`OpenAI API hatası: ${response.status}`);
+                        }
+                        
+                        const result = await response.json();
+                        return result.answer || result.text || result.response || "Üzgünüm, bir yanıt oluşturulamadı.";
+                    } catch (error) {
+                        console.error("OpenAI ile soru cevaplama hatası:", error);
+                        // Fallback yanıt
+                        return "Üzgünüm, şu anda OpenAI modeliyle iletişim kurarken bir sorun yaşıyorum. Lütfen daha sonra tekrar deneyin.";
                     }
                 }
             };
@@ -253,419 +332,429 @@ if (window.AIIntegrationModule) {
             };
         }
         
-        // Veri önişleme fonksiyonu
+        // Veri ön işleme
         function preprocessData(data) {
-            // Veri önişleme mantığı burada
-            // Kod uzunluğu kısıtlaması için basit tutuldu
-            return {
-                inputs: data.map(item => {
-                    return AppConfig.ai.machineLearning.features.map(feature => item[feature] || 0);
-                }),
-                outputs: data.map(item => [item.output || 0])
-            };
+            // Örnek veri ön işleme (gerçek uygulamada daha karmaşık olabilir)
+            const inputs = [];
+            const outputs = [];
+            
+            data.forEach(item => {
+                const input = [];
+                // Özellikleri input'a ekle
+                AppConfig.ai.machineLearning.features.forEach(feature => {
+                    input.push(parseFloat(item[feature]) || 0);
+                });
+                
+                inputs.push(input);
+                outputs.push([parseFloat(item.target) || 0]);
+            });
+            
+            return { inputs, outputs };
         }
         
-        // Girdi önişleme fonksiyonu
+        // Girdi ön işleme
         function preprocessInput(inputData) {
-            return AppConfig.ai.machineLearning.features.map(feature => inputData[feature] || 0);
+            const input = [];
+            
+            // Özellikleri input'a ekle
+            AppConfig.ai.machineLearning.features.forEach(feature => {
+                input.push(parseFloat(inputData[feature]) || 0);
+            });
+            
+            return input;
         }
         
-        // Yapay zeka yeteneklerini sistemle entegre et
+        // AI yeteneklerini entegre et
         function integrateAICapabilities() {
-            console.log("Yapay Zeka yetenekleri entegre ediliyor...");
+            // Dashboard'a AI öngörülerini entegre et
+            if (document.getElementById('ai-insights-panel')) {
+                updateDashboardWithAIInsights();
+            }
             
-            // Dashboard entegrasyonu
-            if (typeof window.loadDashboardData === 'function') {
-                const originalLoadDashboard = window.loadDashboardData;
+            // Sipariş detaylarına AI önerilerini entegre et
+            document.addEventListener('order-detail-loaded', function(e) {
+                const orderId = e.detail.orderId;
+                const container = e.detail.container;
                 
-                // Fonksiyonu güçlendir
-                window.loadDashboardData = async function() {
-                    const result = await originalLoadDashboard();
+                if (orderId && container) {
+                    enhanceOrderDetailWithAI(orderId, container);
+                }
+            });
+            
+            // Üretim planlama sayfasına AI önerilerini entegre et
+            document.addEventListener('production-plan-loaded', function() {
+                enhanceProductionPlanWithAI();
+            });
+            
+            // AI asistanını formlarla entegre et
+            document.querySelectorAll('.ai-assist-btn').forEach(button => {
+                button.addEventListener('click', function(e) {
+                    e.preventDefault();
                     
-                    // Yapay zeka önerileri ekle
-                    try {
-                        const aiInsights = await generateAIInsights();
-                        updateDashboardWithAIInsights(aiInsights);
-                    } catch (error) {
-                        console.warn("AI önerileri yüklenirken hata:", error);
+                    const targetInput = document.getElementById(this.getAttribute('data-target'));
+                    const context = this.getAttribute('data-context');
+                    
+                    if (targetInput) {
+                        generateAISuggestion(targetInput, context);
                     }
-                    
-                    return result;
-                };
-            }
+                });
+            });
             
-            // Sipariş entegrasyonu
-            if (typeof window.showOrderDetail === 'function') {
-                const originalShowOrderDetail = window.showOrderDetail;
-                
-                // Fonksiyonu güçlendir
-                window.showOrderDetail = function(orderId) {
-                    // Orijinal fonksiyonu çağır
-                    originalShowOrderDetail(orderId);
-                    
-                    // Yapay zeka analizini ekle
-                    enhanceOrderDetailWithAI(orderId);
-                };
-            }
-            
-            // Üretim entegrasyonu
-            if (typeof window.showProductionPlan === 'function') {
-                const originalShowProductionPlan = window.showProductionPlan;
-                
-                // Fonksiyonu güçlendir
-                window.showProductionPlan = function() {
-                    // Orijinal fonksiyonu çağır
-                    originalShowProductionPlan();
-                    
-                    // Yapay zeka optimizasyonunu ekle
-                    enhanceProductionPlanWithAI();
-                };
-            }
-            
-            // Malzeme entegrasyonu
-            if (typeof window.loadStockData === 'function') {
-                const originalLoadStockData = window.loadStockData;
-                
-                // Fonksiyonu güçlendir
-                window.loadStockData = async function() {
-                    const result = await originalLoadStockData();
-                    
-                    // Yapay zeka önerilerini ekle
-                    try {
-                        const materialInsights = await generateMaterialAIInsights();
-                        updateStockWithAIInsights(materialInsights);
-                    } catch (error) {
-                        console.warn("Malzeme AI önerileri yüklenirken hata:", error);
-                    }
-                    
-                    return result;
-                };
-            }
-            
-            // Diğer entegrasyonlar...
-            
-            console.log("Yapay Zeka yetenekleri başarıyla entegre edildi");
-            return true;
+            console.log("AI yetenekleri entegre edildi");
         }
         
-        // Dashboard'a yapay zeka önerilerini ekle
+        // Yapay zeka öngörülerini güncelle
         function updateDashboardWithAIInsights(insights) {
-            const aiRecommendations = document.getElementById('ai-recommendations');
-            if (!aiRecommendations) return;
+            const container = document.getElementById('ai-insights-panel');
+            if (!container) return;
             
-            // Eğer içerik varsa güncelle
-            if (insights && insights.recommendation) {
-                aiRecommendations.innerHTML = insights.recommendation;
+            // Yapay zeka modüllerinden veri topla ve görüntüle
+            if (window.AIAnalytics && window.AIAnalytics.displayAIInsights) {
+                window.AIAnalytics.displayAIInsights(container.id)
+                    .then(() => {
+                        Logger.info("Dashboard AI öngörüleri başarıyla güncellendi");
+                        EventBus.emit('ai-insights-updated');
+                    })
+                    .catch(error => {
+                        Logger.error("Dashboard AI öngörüler güncellenirken hata", { error: error.message });
+                        container.innerHTML = `<div class="error-box">AI öngörüleri yüklenirken hata: ${error.message}</div>`;
+                    });
+            } else {
+                Logger.warn("AIAnalytics modülü bulunamadı veya displayAIInsights fonksiyonu yok");
+                container.innerHTML = '<div class="info-box warning">AI analiz modülü henüz yüklenmemiş.</div>';
+                
+                // Modülü dinamik olarak yüklemeyi dene
+                import('./main.js')
+                    .then(module => {
+                        Logger.info("AI modülleri başarıyla yüklendi", { module: Object.keys(module.default) });
+                        if (module.default.AIAnalytics && module.default.AIAnalytics.displayAIInsights) {
+                            module.default.AIAnalytics.displayAIInsights(container.id);
+                        }
+                    })
+                    .catch(error => {
+                        Logger.error("AI modüllerini yüklerken hata", { error: error.message });
+                    });
             }
         }
         
         // Sipariş detayını yapay zeka ile zenginleştir
-        function enhanceOrderDetailWithAI(orderId) {
-            // Sipariş detay modülünü bul
-            const orderDetailModal = document.getElementById('order-detail-modal');
-            if (!orderDetailModal) return;
+        function enhanceOrderDetailWithAI(orderId, container) {
+            if (!orderId || !container) return;
             
-            // AI tab'ı yoksa ekle
-            const orderTabs = orderDetailModal.querySelector('.tabs');
+            // AI paneli ekle
+            const aiPanel = document.createElement('div');
+            aiPanel.className = 'order-detail-section ai-panel';
+            aiPanel.innerHTML = `
+                <h3><i class="fas fa-robot"></i> Yapay Zeka Analizi</h3>
+                <div class="ai-analysis-content" id="ai-analysis-${orderId}">
+                    <div class="loading">
+                        <i class="fas fa-spinner fa-spin"></i> Yapay zeka analizi yükleniyor...
+                    </div>
+                </div>
+            `;
             
-            if (orderTabs && !orderTabs.querySelector(`[data-tab="ai-analysis"]`)) {
-                // AI analizi tab'ı ekle
-                const aiTab = document.createElement('div');
-                aiTab.className = 'tab';
-                aiTab.setAttribute('data-tab', 'ai-analysis');
-                aiTab.textContent = 'Yapay Zeka Analizi';
-                orderTabs.appendChild(aiTab);
-                
-                // AI analizi içerik alanı ekle
-                const tabContents = orderDetailModal.querySelector('.modal-body');
-                
-                if (tabContents) {
-                    const aiContent = document.createElement('div');
-                    aiContent.className = 'tab-content';
-                    aiContent.id = 'ai-analysis-content';
-                    aiContent.innerHTML = '<div class="loading"><i class="fas fa-spinner fa-spin"></i> Yapay zeka analizi yükleniyor...</div>';
-                    tabContents.appendChild(aiContent);
-                    
-                    // Tab olay dinleyicisini ekle
-                    aiTab.addEventListener('click', function() {
-                        // Tüm tab ve içerikleri deaktif et
-                        orderTabs.querySelectorAll('.tab').forEach(tab => tab.classList.remove('active'));
-                        tabContents.querySelectorAll('.tab-content').forEach(content => content.classList.remove('active'));
-                        
-                        // Bu tab'ı aktif et
-                        aiTab.classList.add('active');
-                        aiContent.classList.add('active');
-                        
-                        // AI analizini yükle
-                        loadOrderAIAnalysis(orderId, aiContent);
-                    });
-                }
-            }
+            container.appendChild(aiPanel);
+            
+            // AI analizini yükle
+            loadOrderAIAnalysis(orderId, `ai-analysis-${orderId}`);
         }
         
-        // Sipariş için yapay zeka analizi yükle
-        async function loadOrderAIAnalysis(orderId, container) {
+        // Sipariş AI analizini yükle
+        async function loadOrderAIAnalysis(orderId, containerId) {
+            const container = document.getElementById(containerId);
+            if (!container) return;
+            
             try {
-                // Sipariş verilerini al
-                const order = await getOrderDetails(orderId);
-                
-                if (!order) {
-                    container.innerHTML = `<div class="error-box">Sipariş bilgileri alınamadı.</div>`;
-                    return;
+                // Sipariş detaylarını getir
+                const orderResponse = await fetch(`/api/orders/${orderId}`);
+                if (!orderResponse.ok) {
+                    throw new Error(`Sipariş bilgileri alınamadı: ${orderResponse.status}`);
                 }
+                const order = await orderResponse.json();
                 
-                // Gecikme riski analizi
-                const delayRisk = await analyzeDelayRisk(order);
+                // Malzeme durumunu getir
+                const materialsResponse = await fetch(`/api/materials/status/${orderId}`);
+                if (!materialsResponse.ok) {
+                    throw new Error(`Malzeme durumu alınamadı: ${materialsResponse.status}`);
+                }
+                const materials = await materialsResponse.json();
                 
-                // Optimizasyon önerileri
-                const optimizations = await analyzeOrderOptimizations(order);
+                // AI tavsiyelerini al
+                const aiResponse = await fetch(`/api/ai/analyze-order/${orderId}`);
+                const aiData = aiResponse.ok ? await aiResponse.json() : { 
+                    recommendations: [],
+                    riskScore: calculateRiskScore(order, materials),
+                    estimatedCompletionDate: estimateCompletionDate(order, materials)
+                };
                 
-                // Container'a analiz sonuçlarını ekle
-                container.innerHTML = `
-                    <div class="ai-analysis-container">
-                        <div class="ai-section" style="margin-bottom: 20px;">
-                            <h3 style="margin-bottom: 10px;">Gecikme Riski Analizi</h3>
-                            <div class="risk-meter" style="margin-bottom: 15px;">
-                                <div class="risk-bar" style="height: 8px; background-color: #e2e8f0; border-radius: 4px; overflow: hidden;">
-                                    <div style="height: 100%; width: ${delayRisk.riskPercentage}%; background-color: ${delayRisk.riskColor};"></div>
-                                </div>
-                                <div style="display: flex; justify-content: space-between; margin-top: 5px; font-size: 12px;">
-                                    <span>Düşük Risk</span>
-                                    <span>Orta Risk</span>
-                                    <span>Yüksek Risk</span>
-                                </div>
-                            </div>
-                            <div class="risk-details" style="margin-bottom: 15px; padding: 15px; background-color: #f8fafc; border-radius: 8px;">
-                                <p style="margin-bottom: 10px;"><strong>Risk Seviyesi:</strong> <span style="color: ${delayRisk.riskColor};">${delayRisk.riskLevel}</span></p>
-                                <p style="margin-bottom: 10px;"><strong>Risk Faktörleri:</strong></p>
-                                <ul style="margin-left: 20px;">
-                                    ${delayRisk.riskFactors.map(factor => `<li>${factor}</li>`).join('')}
-                                </ul>
-                            </div>
+                // Analiz içeriğini oluştur
+                let html = `
+                    <div class="ai-analysis-summary">
+                        <div class="risk-score ${getRiskLevelClass(aiData.riskScore)}">
+                            <div class="score-value">${aiData.riskScore}%</div>
+                            <div class="score-label">Gecikme Riski</div>
                         </div>
-                        
-                        <div class="ai-section" style="margin-bottom: 20px;">
-                            <h3 style="margin-bottom: 10px;">Optimizasyon Önerileri</h3>
-                            <div class="optimizations" style="margin-bottom: 15px;">
-                                ${optimizations.map(opt => `
-                                    <div style="padding: 15px; background-color: #f8fafc; border-radius: 8px; margin-bottom: 10px; border-left: 4px solid ${opt.priorityColor};">
-                                        <div style="display: flex; justify-content: space-between; margin-bottom: 5px;">
-                                            <strong>${opt.title}</strong>
-                                            <span style="font-size: 12px; color: ${opt.priorityColor};">${opt.priority} Öncelik</span>
-                                        </div>
-                                        <p>${opt.description}</p>
-                                    </div>
-                                `).join('')}
-                            </div>
+                        <div class="completion-estimate">
+                            <div class="estimate-date">${formatDate(aiData.estimatedCompletionDate)}</div>
+                            <div class="estimate-label">Tahmini Tamamlanma</div>
                         </div>
-                        
-                        <div class="ai-section" style="margin-bottom: 20px;">
-                            <h3 style="margin-bottom: 10px;">Tahmini Teslim Analizi</h3>
-                            <div style="padding: 15px; background-color: #f8fafc; border-radius: 8px;">
-                                <table style="width: 100%;">
-                                    <tr>
-                                        <td style="padding: 8px 0; border-bottom: 1px solid #e2e8f0;"><strong>Planlanan Teslim:</strong></td>
-                                        <td style="padding: 8px 0; border-bottom: 1px solid #e2e8f0;">${formatDate(order.deliveryDate)}</td>
-                                    </tr>
-                                    <tr>
-                                        <td style="padding: 8px 0; border-bottom: 1px solid #e2e8f0;"><strong>Tahmini Teslim:</strong></td>
-                                        <td style="padding: 8px 0; border-bottom: 1px solid #e2e8f0; ${delayRisk.estimatedDeliveryDate > new Date(order.deliveryDate) ? 'color: #ef4444;' : 'color: #10b981;'}">
-                                            ${formatDate(delayRisk.estimatedDeliveryDate)}
-                                        </td>
-                                    </tr>
-                                    <tr>
-                                        <td style="padding: 8px 0; border-bottom: 1px solid #e2e8f0;"><strong>Sapma:</strong></td>
-                                        <td style="padding: 8px 0; border-bottom: 1px solid #e2e8f0; ${delayRisk.deliveryDeviation > 0 ? 'color: #ef4444;' : 'color: #10b981;'}">
-                                            ${delayRisk.deliveryDeviation > 0 ? '+' : ''}${delayRisk.deliveryDeviation} gün
-                                        </td>
-                                    </tr>
-                                    <tr>
-                                        <td style="padding: 8px 0;"><strong>Başarı Olasılığı:</strong></td>
-                                        <td style="padding: 8px 0;">${delayRisk.successProbability}%</td>
-                                    </tr>
-                                </table>
-                            </div>
+                        <div class="material-status">
+                            <div class="status-value">${materials.availablePercentage || 0}%</div>
+                            <div class="status-label">Malzeme Hazırlık</div>
                         </div>
                     </div>
                 `;
+                
+                // Tavsiyeler
+                if (aiData.recommendations && aiData.recommendations.length > 0) {
+                    html += `<div class="ai-recommendations"><h4>Öneriler</h4><ul>`;
+                    aiData.recommendations.forEach(rec => {
+                        html += `<li class="${rec.priority}">${rec.text}</li>`;
+                    });
+                    html += `</ul></div>`;
+                }
+                
+                // Yapay zeka panelini güncelle
+                container.innerHTML = html;
+                
             } catch (error) {
                 console.error("Sipariş AI analizi yüklenirken hata:", error);
-                container.innerHTML = `<div class="error-box">Yapay zeka analizi yüklenirken bir hata oluştu: ${error.message}</div>`;
+                container.innerHTML = `<div class="error">Yapay zeka analizi yüklenirken bir hata oluştu: ${error.message}</div>`;
+            }
+            
+            function calculateRiskScore(order, materials) {
+                // Basit bir risk skoru hesaplama
+                let score = 0;
+                
+                // Malzeme hazırlık durumu
+                if (materials.availablePercentage) {
+                    score += (100 - materials.availablePercentage) * 0.5;
+                } else {
+                    score += 50; // Varsayılan risk
+                }
+                
+                // Teslim tarihine kalan süre
+                const deliveryDate = new Date(order.deliveryDate);
+                const today = new Date();
+                const daysLeft = Math.ceil((deliveryDate - today) / (1000 * 60 * 60 * 24));
+                
+                if (daysLeft < 0) {
+                    score += 100; // Zaten gecikmiş
+                } else if (daysLeft < 7) {
+                    score += (7 - daysLeft) * 10;
+                }
+                
+                return Math.min(Math.round(score), 100);
+            }
+            
+            function estimateCompletionDate(order, materials) {
+                // Tahmini tamamlanma tarihi hesapla
+                const today = new Date();
+                const deliveryDate = new Date(order.deliveryDate);
+                
+                // Malzeme hazırlık durumuna göre ek süre
+                let additionalDays = 0;
+                if (materials.availablePercentage < 50) {
+                    additionalDays += 14; // Malzemeler hazır değilse 2 hafta ekle
+                } else if (materials.availablePercentage < 80) {
+                    additionalDays += 7; // Malzemeler kısmen hazırsa 1 hafta ekle
+                }
+                
+                // Tahmini tarihi hesapla
+                const estimatedDate = new Date(today);
+                estimatedDate.setDate(today.getDate() + additionalDays + (order.estimatedProductionDays || 10));
+                
+                return estimatedDate;
+            }
+            
+            function getRiskLevelClass(risk) {
+                if (risk >= 70) return 'high-risk';
+                if (risk >= 30) return 'medium-risk';
+                return 'low-risk';
+            }
+            
+            function formatDate(date) {
+                if (!date) return 'Bilinmiyor';
+                
+                const d = new Date(date);
+                return d.toLocaleDateString('tr-TR');
             }
         }
         
         // Üretim planını yapay zeka ile zenginleştir
         function enhanceProductionPlanWithAI() {
-            // Üretim planı yüklendikten sonra yapay zeka önerilerini ekle
-            setTimeout(async () => {
-                try {
-                    // Üretim optimizasyonu
-                    const optimizations = await generateProductionOptimizations();
+            // AI önerileri paneli ekle
+            const container = document.querySelector('.production-plan-container');
+            if (!container) return;
+            
+            const aiPanel = document.createElement('div');
+            aiPanel.className = 'ai-recommendations-panel';
+            aiPanel.innerHTML = `
+                <h3>Yapay Zeka Üretim Önerileri</h3>
+                <div class="ai-recommendations-content" id="production-ai-recommendations">
+                    <div class="loading">
+                        <i class="fas fa-spinner fa-spin"></i> Yapay zeka önerileri yükleniyor...
+                    </div>
+                </div>
+            `;
+            
+            // Paneli ekle (container'ın ilk çocuğu olarak)
+            container.insertBefore(aiPanel, container.firstChild);
+            
+            // Önerileri yükle
+            fetch('/api/ai/production-recommendations')
+                .then(response => response.json())
+                .then(data => {
+                    const recommendationsContainer = document.getElementById('production-ai-recommendations');
                     
-                    // Optimizasyon önerilerini ekle
-                    const productionContainer = document.getElementById('production-page');
-                    if (!productionContainer) return;
-                    
-                    // Optimizasyon paneli için yer var mı kontrol et
-                    let aiPanel = productionContainer.querySelector('.ai-optimization-panel');
-                    
-                    if (!aiPanel) {
-                        // Yeni panel oluştur
-                        aiPanel = document.createElement('div');
-                        aiPanel.className = 'ai-optimization-panel card';
-                        aiPanel.innerHTML = `
-                            <div class="card-header">
-                                <div class="card-title">Yapay Zeka Optimizasyon Önerileri</div>
-                            </div>
-                            <div class="card-body" id="ai-production-recommendations">
-                                <div class="loading"><i class="fas fa-spinner fa-spin"></i> Yapay zeka önerileri yükleniyor...</div>
-                            </div>
-                        `;
-                        
-                        // Sayfaya ekle
-                        const insertPoint = productionContainer.querySelector('.card');
-                        if (insertPoint && insertPoint.parentNode) {
-                            insertPoint.parentNode.insertBefore(aiPanel, insertPoint.nextSibling);
-                        } else {
-                            productionContainer.appendChild(aiPanel);
-                        }
+                    if (!data || !data.recommendations || data.recommendations.length === 0) {
+                        recommendationsContainer.innerHTML = '<p>Şu anda herhangi bir yapay zeka önerisi bulunmuyor.</p>';
+                        return;
                     }
                     
-                    // AI önerileri için içerik ekle
-                    const aiContent = aiPanel.querySelector('.card-body');
-                    if (aiContent) {
-                        aiContent.innerHTML = `
-                            <div class="loading"><i class="fas fa-spinner fa-spin"></i> Yapay zeka önerileri yükleniyor...</div>
+                    let html = '<div class="recommendations-list">';
+                    
+                    data.recommendations.forEach(rec => {
+                        html += `
+                            <div class="recommendation-item ${rec.priority}-priority">
+                                <div class="rec-title">${rec.title}</div>
+                                <div class="rec-description">${rec.description}</div>
+                                ${rec.potentialSavings ? `<div class="rec-savings">Potansiyel Kazanç: ${rec.potentialSavings}</div>` : ''}
+                                <div class="rec-actions">
+                                    <button class="btn btn-sm btn-primary apply-recommendation" data-id="${rec.id}">Uygula</button>
+                                    <button class="btn btn-sm btn-link dismiss-recommendation" data-id="${rec.id}">Kapat</button>
+                                </div>
+                            </div>
                         `;
-                        
-                        // AI önerilerini yükle
-                        loadProductionAIRecommendations(optimizations, aiContent);
-                    }
-                } catch (error) {
-                    console.error("Üretim planı AI önerileri yüklenirken hata:", error);
-                    aiPanel.innerHTML = `<div class="error-box">Yapay zeka önerileri yüklenirken bir hata oluştu: ${error.message}</div>`;
-                }
-            }, 500);
+                    });
+                    
+                    html += '</div>';
+                    recommendationsContainer.innerHTML = html;
+                    
+                    // Buton olaylarını ekle
+                    document.querySelectorAll('.apply-recommendation').forEach(btn => {
+                        btn.addEventListener('click', function() {
+                            const recId = this.getAttribute('data-id');
+                            applyAIRecommendation(recId);
+                        });
+                    });
+                    
+                    document.querySelectorAll('.dismiss-recommendation').forEach(btn => {
+                        btn.addEventListener('click', function() {
+                            const recId = this.getAttribute('data-id');
+                            dismissAIRecommendation(recId);
+                            this.closest('.recommendation-item').remove();
+                        });
+                    });
+                })
+                .catch(error => {
+                    console.error("Yapay zeka önerileri yüklenirken hata:", error);
+                    document.getElementById('production-ai-recommendations').innerHTML = 
+                        `<div class="error">Öneriler yüklenirken bir hata oluştu: ${error.message}</div>`;
+                });
         }
         
-        // Script yükleme yardımcı fonksiyonu
+        // Harici script yükleme
         function loadScript(url) {
             return new Promise((resolve, reject) => {
-                console.log(`Script yükleniyor: ${url}`);
                 const script = document.createElement('script');
                 script.src = url;
-                script.async = true;
-                
-                script.onload = () => {
-                    console.log(`Script yüklendi: ${url}`);
-                    resolve();
-                };
-                
-                script.onerror = (error) => {
-                    console.error(`Script yüklenirken hata: ${url}`, error);
-                    reject(new Error(`Script yüklenemedi: ${url}`));
-                };
-                
+                script.onload = () => resolve();
+                script.onerror = (e) => reject(new Error(`Script yükleme hatası: ${url}`));
                 document.head.appendChild(script);
             });
         }
         
-        // Demo yanıt üretme (yedek)
+        // Yedek yanıt oluştur (AI çalışmadığında)
         function generateFallbackResponse(question) {
-            question = question.toLowerCase();
+            const fallbackResponses = {
+                default: "Üzgünüm, şu anda bu soruya yanıt veremiyorum. Lütfen daha sonra tekrar deneyin.",
+                greeting: "Merhaba! Size nasıl yardımcı olabilirim?",
+                thanks: "Rica ederim! Başka bir sorunuz var mı?",
+                production: "Üretim planlaması ile ilgili bilgileri kontrol panelinden görüntüleyebilirsiniz."
+            };
             
-            if (question.includes('malzeme')) {
-                return "Kritik seviyenin altında 2 malzeme bulunuyor: Siemens 7SR1003-1JA20-2DA0+ZY20 24VDC (Stok: 2, Önerilen: 5) ve KAP-80/190-95 Akım Trafosu (Stok: 3, Önerilen: 5).";
-            } else if (question.includes('üretim') || question.includes('süre')) {
-                return "Mevcut üretim planına göre ortalama tamamlama süresi 14 gün. Gecikme riski %15 olarak hesaplanmıştır.";
-            } else if (question.includes('hücre') || question.includes('RM')) {
-                return "RM 36 CB hücresinin ortalama üretim süresi 12 iş günüdür. Malzeme temin süreleri dahil değildir.";
+            if (question.toLowerCase().includes("merhaba") || question.toLowerCase().includes("selam")) {
+                return fallbackResponses.greeting;
+            } else if (question.toLowerCase().includes("teşekkür") || question.toLowerCase().includes("sağol")) {
+                return fallbackResponses.thanks;
+            } else if (question.toLowerCase().includes("üretim") || question.toLowerCase().includes("plan")) {
+                return fallbackResponses.production;
             }
             
-            return "Üzgünüm, şu anda bu soruya yanıt veremiyorum. Sistem bakımda olabilir.";
+            return fallbackResponses.default;
         }
         
-        // Yapay zeka sistemini başlat
+        // Modülü başlat
         async function initialize() {
             if (initialized) return true;
             
             try {
                 await loadAIModels();
+                integrateAICapabilities();
+                
                 initialized = true;
-                console.log("Yapay Zeka Entegrasyonu başarıyla tamamlandı");
+                console.log("AI Entegrasyon Modülü başarıyla başlatıldı");
+                
                 return true;
             } catch (error) {
-                console.error("Yapay Zeka başlatma hatası:", error);
+                console.error("AI Entegrasyon Modülü başlatılırken hata:", error);
                 return false;
             }
         }
         
-        // Başlatma işlemini yap
-        initialize().then(status => {
-            if (status) {
-                console.log("AIIntegrationModule hazır");
-                EventBus.emit('ai:ready', { service: 'AIIntegrationModule' });
+        // DeepSeek modeli ile soru sor
+        async function askDeepSeek(question, context = "") {
+            if (!aiModels.deepseek) {
+                Logger.warn("DeepSeek modeli yüklenmemiş, yükleme başlatılıyor");
+                console.warn("DeepSeek modeli yüklenmemiş. İlk model yükleniyor...");
+                await initializeDeepSeekModel();
             }
+            
+            if (aiModels.deepseek) {
+                Logger.info("DeepSeek modeli ile soru yanıtlanıyor", { questionLength: question.length });
+                return await aiModels.deepseek.askQuestion(question, context);
+            } else {
+                Logger.error("DeepSeek modeli kullanılamıyor");
+                console.error("DeepSeek modeli kullanılamıyor");
+                return generateFallbackResponse(question);
+            }
+        }
+        
+        // OpenAI modeli ile soru sor
+        async function askOpenAI(question, context = "") {
+            if (!aiModels.openai) {
+                console.warn("OpenAI modeli yüklenmemiş. İlk model yükleniyor...");
+                await initializeOpenAIModel();
+            }
+            
+            if (aiModels.openai) {
+                return await aiModels.openai.askQuestion(question, context);
+            } else {
+                console.error("OpenAI modeli kullanılamıyor");
+                return generateFallbackResponse(question);
+            }
+        }
+        
+        // Modül başlatma ve olay dinleyiciler
+        document.addEventListener('DOMContentLoaded', () => {
+            setTimeout(() => {
+                initialize().then(status => {
+                    if (status) {
+                        EventBus.emit('ai-modules-loaded', { success: true });
+                    }
+                });
+            }, 1000); // Diğer modüllerin yüklenmesi için biraz bekle
         });
         
-        // Public API
+        // Dışa aktarılan metodlar
         return {
             initialize,
-            isInitialized: () => initialized,
-            askDeepSeek: async function(question, context = "") {
-                try {
-                    if (!initialized) {
-                        await initialize();
-                    }
-                    
-                    if (!aiModels.deepseek) {
-                        console.warn("DeepSeek modeli henüz yüklenmedi");
-                        
-                        // AIService üzerinden sormayı dene
-                        if (typeof AIService !== 'undefined') {
-                            return await AIService.askDeepSeek(question, context);
-                        }
-                        
-                        throw new Error("DeepSeek modeli kullanılamıyor");
-                    }
-                    
-                    return await aiModels.deepseek.askQuestion(question, context);
-                    
-                } catch (error) {
-                    console.error("askDeepSeek hatası:", error);
-                    
-                    // Fallback olarak AIService'i dene
-                    if (typeof AIService !== 'undefined') {
-                        try {
-                            return await AIService.askDeepSeek(question, context);
-                        } catch (serviceError) {
-                            console.error("AIService.askDeepSeek hatası:", serviceError);
-                        }
-                    }
-                    
-                    // Demo yanıt oluştur
-                    return generateFallbackResponse(question);
-                }
-            },
-            predictMaterials: async (orderDetails) => {
-                if (!initialized) await initialize();
-                if (aiModels.deepseek) {
-                    return aiModels.deepseek.predictMaterials(orderDetails);
-                }
-                return null;
-            },
-            predictProductionTime: async (orderDetails) => {
-                if (!initialized) await initialize();
-                if (aiModels.deepseek) {
-                    return aiModels.deepseek.predictProductionTime(orderDetails);
-                }
-                return null;
-            }
+            askDeepSeek,
+            askOpenAI,
+            loadAIModels,
+            preprocessInput,
+            generateFallbackResponse
         };
     })();
-    
-    // Global olarak erişimi sağla
-    if (typeof module !== 'undefined' && module.exports) {
-        module.exports = window.AIIntegrationModule;
-    }
 }

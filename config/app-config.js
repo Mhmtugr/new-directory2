@@ -10,6 +10,7 @@ const AppConfig = {
     firebase: {
         // Firebase config
     },
+    logLevel: 'INFO', // DEBUG, INFO, WARN, ERROR, NONE
     modules: {
         dashboard: true,
         production: true,
@@ -17,7 +18,7 @@ const AppConfig = {
         inventory: true,
         ai: {
             enabled: true,
-            modelType: 'hybrid', // hybrid, openai, deepseek, tensorflow
+            modelType: 'deepseek', // hybrid, openai, deepseek, tensorflow
             chatbot: true,
             analytics: true,
             prediction: true,
@@ -33,13 +34,14 @@ const AppConfig = {
             apiKey: "sk-42d0185c484b4bf2907392864f4ae76d",
             model: "deepseek-r1-llm",
             maxTokens: 2000,
-            temperature: 0.7
+            temperature: 0.7,
+            systemMessage: "Sen bir üretim takip ve planlama asistanısın. Orta gerilim anahtarlama ekipmanları üretimi konusunda uzmanlaşmışsın. Firma için imalat süreçlerini takip eden, tahmin ve analiz yapabilen bir yapay zeka asistanısın."
         },
-        // OpenAI entegrasyonu (isteğe bağlı)
+        // OpenAI entegrasyonu
         openai: {
             apiKey: "", // Sadece geliştirme/demo için
-            model: "gpt-3.5-turbo", 
-            systemMessage: "Sen bir üretim takip ve planlama asistanısın. Orta gerilim anahtarlama ekipmanları üretimi konusunda uzmanlaşmışsın."
+            model: "gpt-4", // GPT-4 modeline yükseltildi
+            systemMessage: "Sen bir üretim takip ve planlama asistanısın. Orta gerilim anahtarlama ekipmanları üretimi konusunda uzmanlaşmışsın. Firma için imalat süreçlerini takip eden, tahmin ve analiz yapabilen bir yapay zeka asistanısın."
         },
         // Makine Öğrenmesi entegrasyonu
         machineLearning: {
@@ -50,7 +52,13 @@ const AppConfig = {
             features: [
                 "hucre_tipi", "voltaj", "akim", "role_tipi", "uretim_suresi", 
                 "malzeme_tedarik_suresi", "montaj_suresi", "test_suresi"
-            ]
+            ],
+            advancedFeatures: {
+                productionOptimization: true,
+                delayPrediction: true,
+                materialShortageAlert: true,
+                supplierRating: true
+            }
         }
     },
     erpIntegration: {
@@ -63,6 +71,38 @@ const AppConfig = {
             orders: "SIPARIS",
             materials: "MALZEME",
             customers: "MUSTERI"
+        },
+        // Canias ERP'ye özel entegrasyon detayları
+        canias: {
+            host: "192.168.1.100",
+            port: 8080,
+            username: "api_user",
+            modules: {
+                inventory: {
+                    enabled: true,
+                    tables: ["B01_STOK", "SARF_MALZEME", "DEPO_HAREKET"]
+                },
+                production: {
+                    enabled: true,
+                    tables: ["URETIM_PLAN", "URETIM_EMIR", "URETIM_TAKIP"]
+                },
+                purchasing: {
+                    enabled: true,
+                    tables: ["SIPARIS", "SATINALMA_TALEP", "TEDARIKCI"]
+                },
+                sales: {
+                    enabled: true,
+                    tables: ["SATIS_SIPARIS", "MUSTERI", "TEKLIFLER"]
+                }
+            },
+            // Sipariş için malzeme rezervasyonu özelliği
+            reserveMaterials: true,
+            // Stok güncelleme ayarları
+            stockUpdateSettings: {
+                realtime: true,
+                checkReservedItems: true,
+                alertThreshold: 5
+            }
         }
     },
     notifications: {
@@ -76,7 +116,15 @@ const AppConfig = {
         materialShortage: {
             enabled: true,
             threshold: 5 // Eşik değerin altındaki malzemeler için uyarı
-        }
+        },
+        // Kullanıcı ve departman bazlı bildirim ayarları
+        departments: {
+            production: ["delay", "materialShortage", "optimization"],
+            purchasing: ["materialShortage", "supplierDelay", "stockAlert"],
+            sales: ["orderStatus", "deliveryDelay"],
+            management: ["all"]
+        },
+        responseDeadline: 3 // Uyarılara maksimum 3 saatte yanıt verilmesi bekleniyor
     },
     security: {
         tokenExpiration: 24, // saat
